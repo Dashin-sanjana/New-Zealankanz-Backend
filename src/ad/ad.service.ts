@@ -193,8 +193,11 @@ export class AdService {
           }
         : {}),
       ...(query.featured ? { featured: query.featured === 'true' } : {}),
-      ...(query.category ? { category: { slug: query.category } } : {}),
-      ...(query.subcategory ? { category: { slug: query.subcategory } } : {}),
+      ...(query.subcategory
+        ? { category: { slug: query.subcategory } }
+        : query.category
+        ? { category: { slug: query.category } }
+        : {}),
       ...(query.location ? { location: { slug: query.location } } : {}),
     };
 

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -14,9 +15,12 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ResendVerificationDto } from './dto/resend-verification.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
@@ -39,15 +43,16 @@ export class AuthService {
       },
     });
     const token = await this.createEmailVerificationToken(user.id);
-    await this.notifications.create({
+    this.notifications.create({
       userId: user.id,
       type: NotificationType.EMAIL_VERIFICATION,
       title: 'Verify your email',
       message: 'A verification token was issued for your account.',
-    });
-    await this.mail.sendVerification(user.email, token);
+    }).catch((e) => this.logger.warn(`Notification failed: ${e}`));
+    this.mail.sendVerification(user.email, token)
+      .catch((e) => this.logger.warn(`Verification email failed: ${e}`));
 
-    return { user: this.publicUser(user), verificationToken: token };
+    return { user: this.publicUser(user) };
   }
 
   async login(dto: LoginDto) {
@@ -83,16 +88,16 @@ export class AuthService {
         expiresAt: new Date(Date.now() + 1000 * 60 * 60),
       },
     });
-    await this.notifications.create({
+    this.notifications.create({
       userId: user.id,
       type: NotificationType.PASSWORD_RESET_REQUESTED,
       title: 'Password reset requested',
       message: 'A password reset token was issued for your account.',
-    });
-    await this.mail.sendPasswordReset(user.email, token);
+    }).catch((e) => this.logger.warn(`Notification failed: ${e}`));
+    this.mail.sendPasswordReset(user.email, token)
+      .catch((e) => this.logger.warn(`Password reset email failed: ${e}`));
     return {
       message: 'If the email exists, a reset token was sent',
-      resetToken: token,
     };
   }
 
@@ -143,6 +148,32 @@ export class AuthService {
       message:
         'Logout is client-side for stateless JWTs. Remove the access token on the client.',
     };
+  }
+
+  async resendVerification(dto: ResendVerificationDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email.toLowerCase() },
+    });
+    if (!user) {
+      return {
+        message: 'If the email is registered, a new verification link has been sent.',
+      };
+    }
+    if (user.emailVerified) {
+      throw new BadRequestException('Email is already verified');
+    }
+
+    const token = await this.createEmailVerificationToken(user.id);
+    this.notifications.create({
+      userId: user.id,
+      type: NotificationType.EMAIL_VERIFICATION,
+      title: 'Verify your email',
+      message: 'A verification token was issued for your account.',
+    }).catch((e) => this.logger.warn(`Notification failed: ${e}`));
+    this.mail.sendVerification(user.email, token)
+      .catch((e) => this.logger.warn(`Verification email failed: ${e}`));
+
+    return { message: 'Verification email sent successfully.' };
   }
 
   private async createEmailVerificationToken(userId: string) {

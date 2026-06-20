@@ -1,4 +1,4 @@
-import * as sharp from 'sharp';
+import sharp from 'sharp';
 import { rename, unlink } from 'fs/promises';
 import { extname, join, dirname } from 'path';
 
