@@ -1,0 +1,25 @@
+# Compiled output
+/dist
+/node_modules
+
+# Env files
+.env
+.env.local
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+.cproject
+.settings
+.vscode
+
+# System Files
+.DS_Store
+Thumbs.db
+
+# Package manager
+.pnpm-store
+
+# Uploads / storage
+/uploads

@@ -1,0 +1,175 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum AdStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum BannerPlacement {
+  HOME
+  SIDEBAR
+  CATEGORY
+  LISTING
+  FOOTER
+}
+
+enum NotificationType {
+  AD_SUBMITTED
+  AD_APPROVED
+  AD_REJECTED
+  AD_EXPIRED
+  PASSWORD_RESET_REQUESTED
+  EMAIL_VERIFICATION
+}
+
+model User {
+  id                      String                   @id @default(cuid())
+  email                   String                   @unique
+  password                String
+  name                    String?
+  phone                   String?
+  role                    UserRole                 @default(USER)
+  active                  Boolean                  @default(true)
+  emailVerified           Boolean                  @default(false)
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  ads                     Ad[]
+  notifications           Notification[]
+  passwordResetTokens     PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+}
+
+model Category {
+  id          String     @id @default(cuid())
+  name        String
+  slug        String     @unique
+  description String?
+  metaTitle   String?
+  metaDescription String?
+  parentId    String?
+  parent      Category?  @relation("CategoryChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Category[] @relation("CategoryChildren")
+  ads         Ad[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+model Location {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  metaTitle   String?
+  metaDescription String?
+  ads         Ad[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Ad {
+  id              String    @id @default(cuid())
+  title           String
+  slug            String    @unique
+  description     String
+  price           Decimal?  @db.Decimal(12, 2)
+  contactName     String?
+  contactEmail    String?
+  contactPhone    String?
+  status          AdStatus  @default(PENDING)
+  rejectionReason String?
+  featured        Boolean   @default(false)
+  expiresAt       DateTime?
+  metaTitle       String?
+  metaDescription String?
+  userId          String
+  categoryId      String
+  locationId      String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category        Category  @relation(fields: [categoryId], references: [id])
+  location        Location  @relation(fields: [locationId], references: [id])
+  images          AdImage[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status, featured, createdAt])
+  @@index([categoryId])
+  @@index([locationId])
+}
+
+model AdImage {
+  id        String   @id @default(cuid())
+  adId      String
+  url       String
+  filename  String
+  mimetype  String
+  size      Int
+  sortOrder Int      @default(0)
+  ad        Ad       @relation(fields: [adId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String?
+  type      NotificationType
+  title     String
+  message   String
+  readAt    DateTime?
+  user      User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime         @default(now())
+}
+
+model Banner {
+  id        String          @id @default(cuid())
+  title     String
+  placement BannerPlacement
+  imageUrl  String
+  linkUrl   String?
+  active    Boolean         @default(true)
+  startDate DateTime?
+  endDate   DateTime?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+}
+
+model ContactSubmission {
+  id        String    @id @default(cuid())
+  name      String
+  email     String
+  subject   String
+  message   String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
