@@ -1,13 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { BannerPlacement, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { BannerDto } from './dto/banner.dto';
+
+const PLACEMENT_VALUES = new Set<string>(Object.values(BannerPlacement));
 
 @Injectable()
 export class BannerService {
   constructor(private readonly prisma: PrismaService) {}
 
-  activeByPlacement(placement: BannerPlacement) {
+  activeByPlacement(placementParam: string) {
+    const placement = this.normalizePlacement(placementParam);
     const now = new Date();
     return this.prisma.banner.findMany({
       where: {
@@ -34,6 +37,20 @@ export class BannerService {
 
   delete(id: string) {
     return this.prisma.banner.delete({ where: { id } });
+  }
+
+  private normalizePlacement(placement: string): BannerPlacement {
+    const normalized = placement.toUpperCase();
+    if (PLACEMENT_VALUES.has(normalized)) {
+      return normalized as BannerPlacement;
+    }
+
+    const basePlacement = normalized.split('_')[0];
+    if (PLACEMENT_VALUES.has(basePlacement)) {
+      return basePlacement as BannerPlacement;
+    }
+
+    throw new BadRequestException(`Invalid banner placement: ${placement}`);
   }
 
   private data(dto: BannerDto): Prisma.BannerUncheckedCreateInput {
