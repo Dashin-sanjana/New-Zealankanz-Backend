@@ -3,7 +3,42 @@ const { PrismaClient } = require('@prisma/client');
 const { PrismaPg } = require('@prisma/adapter-pg');
 const { Pool } = require('pg');
 
-const connectionString = process.env.DATABASE_URL;
+function getDatabaseUrl() {
+  const databaseUrl = process.env.DATABASE_URL && process.env.DATABASE_URL.trim();
+
+  if (!databaseUrl) {
+    throw new Error(
+      'DATABASE_URL is not set. Add a valid PostgreSQL connection string to .env before checking the database.',
+    );
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    throw new Error(
+      'DATABASE_URL is not a valid PostgreSQL connection string. Expected format: postgresql://user:password@host:port/database',
+    );
+  }
+
+  if (!['postgresql:', 'postgres:'].includes(parsed.protocol)) {
+    throw new Error(
+      `DATABASE_URL must use the postgresql:// or postgres:// protocol, got ${parsed.protocol}`,
+    );
+  }
+
+  if (!parsed.username || !parsed.password) {
+    throw new Error('DATABASE_URL must include both username and password.');
+  }
+
+  if (!parsed.pathname || parsed.pathname === '/') {
+    throw new Error('DATABASE_URL must include a database name.');
+  }
+
+  return databaseUrl;
+}
+
+const connectionString = getDatabaseUrl();
 const pool = new Pool({ connectionString });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
