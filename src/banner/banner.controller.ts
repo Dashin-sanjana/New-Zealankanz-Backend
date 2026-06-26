@@ -8,7 +8,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { BannerPlacement, UserRole } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -20,7 +20,7 @@ export class BannerController {
   constructor(private readonly banners: BannerService) {}
 
   @Get(':placement')
-  active(@Param('placement') placement: BannerPlacement) {
+  active(@Param('placement') placement: string) {
     return this.banners.activeByPlacement(placement);
   }
 

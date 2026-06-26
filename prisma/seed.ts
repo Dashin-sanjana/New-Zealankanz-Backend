@@ -426,6 +426,24 @@ async function main() {
     ],
   });
 
+  console.log('Creating sample password reset tokens...');
+  await prisma.passwordResetToken.create({
+    data: {
+      token: 'sample-password-reset-token-john',
+      userId: john.id,
+      expiresAt: new Date(Date.now() + 3600000), // 1 hour from now
+    },
+  });
+
+  console.log('Creating sample email verification tokens...');
+  await prisma.emailVerificationToken.create({
+    data: {
+      token: 'sample-email-verification-token-jane',
+      userId: jane.id,
+      expiresAt: new Date(Date.now() + 3600000), // 1 hour from now
+    },
+  });
+
   console.log('Database seeding complete successfully!');
 }
 
