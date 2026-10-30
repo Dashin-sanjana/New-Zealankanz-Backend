@@ -74,11 +74,12 @@ function adBox(title: string): string {
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  private readonly transporter?: nodemailer.Transporter;
+  private readonly transporter?: ReturnType<typeof nodemailer.createTransport>;
   private readonly siteUrl: string;
 
   constructor(private readonly config: ConfigService) {
-    this.siteUrl = this.config.get<string>('PUBLIC_SITE_URL') ?? 'https://newzealankans.nz';
+    this.siteUrl =
+      this.config.get<string>('PUBLIC_SITE_URL') ?? 'https://newzealankans.nz';
 
     const host = this.config.get<string>('SMTP_HOST');
     const port = this.config.get<number>('SMTP_PORT');
@@ -120,9 +121,13 @@ export class EmailService {
       html: layout(
         'Verify your email',
         heading('Verify your email address') +
-          para(`Welcome to ${BRAND_NAME}! Please click the button below to verify your email address and activate your account.`) +
+          para(
+            `Welcome to ${BRAND_NAME}! Please click the button below to verify your email address and activate your account.`,
+          ) +
           btn('Verify Email', verifyUrl) +
-          para(`<br/>If you didn't create an account, you can safely ignore this email.`),
+          para(
+            `<br/>If you didn't create an account, you can safely ignore this email.`,
+          ),
         this.siteUrl,
       ),
     });
@@ -137,9 +142,13 @@ export class EmailService {
       html: layout(
         'Reset your password',
         heading('Reset your password') +
-          para('We received a request to reset your password. Click the button below to choose a new one. This link expires in 1 hour.') +
+          para(
+            'We received a request to reset your password. Click the button below to choose a new one. This link expires in 1 hour.',
+          ) +
           btn('Reset Password', resetUrl) +
-          para(`<br/>If you didn't request a password reset, you can safely ignore this email.`),
+          para(
+            `<br/>If you didn't request a password reset, you can safely ignore this email.`,
+          ),
         this.siteUrl,
       ),
     });
@@ -153,9 +162,13 @@ export class EmailService {
       html: layout(
         'Ad Submitted',
         heading('Ad submitted for review') +
-          para('Thank you for posting on NewZealankans Marketplace. Your listing has been received and is now pending admin review.') +
+          para(
+            'Thank you for posting on NewZealankans Marketplace. Your listing has been received and is now pending admin review.',
+          ) +
           adBox(title) +
-          para('You will receive another email once your ad is approved or if any changes are needed.') +
+          para(
+            'You will receive another email once your ad is approved or if any changes are needed.',
+          ) +
           btn('View My Ads', `${this.siteUrl}/my-ads`),
         this.siteUrl,
       ),
@@ -170,7 +183,9 @@ export class EmailService {
       html: layout(
         'Ad Approved',
         heading('Your ad is live! 🎉') +
-          para('Great news — your listing has been approved by our team and is now visible to buyers on NewZealankans Marketplace.') +
+          para(
+            'Great news — your listing has been approved by our team and is now visible to buyers on NewZealankans Marketplace.',
+          ) +
           adBox(title) +
           btn('View Marketplace', `${this.siteUrl}/search`),
         this.siteUrl,
@@ -189,8 +204,12 @@ export class EmailService {
           adBox(title) +
           (reason
             ? para(`<strong>Reason:</strong> ${reason}`)
-            : para('Our team reviewed your listing and it did not meet our guidelines at this time.')) +
-          para('You are welcome to edit your listing and resubmit it for review.') +
+            : para(
+                'Our team reviewed your listing and it did not meet our guidelines at this time.',
+              )) +
+          para(
+            'You are welcome to edit your listing and resubmit it for review.',
+          ) +
           btn('Edit My Ads', `${this.siteUrl}/my-ads`),
         this.siteUrl,
       ),
@@ -206,7 +225,9 @@ export class EmailService {
         'Ad Expired',
         heading('Your ad has expired') +
           adBox(title) +
-          para('Your listing has reached its expiry date and is no longer visible to buyers. You can repost it to get it back on the marketplace.') +
+          para(
+            'Your listing has reached its expiry date and is no longer visible to buyers. You can repost it to get it back on the marketplace.',
+          ) +
           btn('Post a New Ad', `${this.siteUrl}/post-ad`),
         this.siteUrl,
       ),

@@ -5,7 +5,6 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { AdStatus, NotificationType, Prisma } from '@prisma/client';
-import { extname, join } from 'path';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { NotificationService } from '../notification/notification.service';
@@ -21,6 +20,12 @@ const adInclude = {
   user: { select: { id: true, name: true, email: true } },
 };
 
+const publicAdInclude = {
+  category: { include: { parent: true } },
+  location: true,
+  images: { orderBy: { sortOrder: 'asc' as const } },
+};
+
 @Injectable()
 export class AdService {
   private readonly logger = new Logger(AdService.name);
@@ -32,7 +37,7 @@ export class AdService {
   ) {}
 
   async publicList(query: AdQueryDto) {
-    return this.list(query, { status: AdStatus.APPROVED });
+    return this.list(query, { status: AdStatus.APPROVED }, publicAdInclude);
   }
 
   async adminList(query: AdQueryDto) {
@@ -46,7 +51,7 @@ export class AdService {
   async publicBySlug(slug: string) {
     const ad = await this.prisma.ad.findFirst({
       where: { slug, status: AdStatus.APPROVED },
-      include: adInclude,
+      include: publicAdInclude,
     });
     if (!ad) throw new NotFoundException('Ad not found');
     return ad;
@@ -180,7 +185,11 @@ export class AdService {
     return this.prisma.ad.delete({ where: { id } });
   }
 
-  private async list(query: AdQueryDto, baseWhere: Prisma.AdWhereInput) {
+  private async list(
+    query: AdQueryDto,
+    baseWhere: Prisma.AdWhereInput,
+    include: Prisma.AdInclude = adInclude,
+  ) {
     const { page, limit, skip, take } = getPagination(query);
     const where: Prisma.AdWhereInput = {
       ...baseWhere,
@@ -196,15 +205,15 @@ export class AdService {
       ...(query.subcategory
         ? { category: { slug: query.subcategory } }
         : query.category
-        ? { category: { slug: query.category } }
-        : {}),
+          ? { category: { slug: query.category } }
+          : {}),
       ...(query.location ? { location: { slug: query.location } } : {}),
     };
 
     const [data, total] = await Promise.all([
       this.prisma.ad.findMany({
         where,
-        include: adInclude,
+        include,
         skip,
         take,
         orderBy: [{ featured: 'desc' }, { createdAt: 'desc' }],
@@ -231,7 +240,10 @@ export class AdService {
     };
   }
 
-  private async optimizedImageData(files: Express.Multer.File[] = [], offset = 0) {
+  private async optimizedImageData(
+    files: Express.Multer.File[] = [],
+    offset = 0,
+  ) {
     const results: {
       url: string;
       filename: string;
