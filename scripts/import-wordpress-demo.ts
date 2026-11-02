@@ -55,19 +55,33 @@ const dbUrl = process.env.DATABASE_URL;
 if (!dbUrl) throw new Error('DATABASE_URL is required.');
 const target = new URL(dbUrl);
 const operation = process.argv[2] || '--dry-run';
-if (!['--dry-run', '--apply', '--rollback', '--production-apply'].includes(operation))
-  throw new Error('Use --dry-run, --apply, --rollback, or gated --production-apply.');
-const localTarget = target.hostname === '127.0.0.1' && target.port === '55433' && target.pathname === '/nzk_marketplace_demo';
+if (
+  !['--dry-run', '--apply', '--rollback', '--production-apply'].includes(
+    operation,
+  )
+)
+  throw new Error(
+    'Use --dry-run, --apply, --rollback, or gated --production-apply.',
+  );
+const localTarget =
+  target.hostname === '127.0.0.1' &&
+  target.port === '55433' &&
+  target.pathname === '/nzk_marketplace_demo';
 const productionApply = operation === '--production-apply';
-const approvedProductionTarget = productionApply
-  && process.env.PRISMA_IMPORT_PRODUCTION_APPROVED === 'yes'
-  && process.env.PRISMA_IMPORT_PRODUCTION_BRANCH === 'br-cool-heart-adq4jews'
-  && target.hostname.endsWith('.neon.tech')
-  && target.pathname === '/neondb';
+const approvedProductionTarget =
+  productionApply &&
+  process.env.PRISMA_IMPORT_PRODUCTION_APPROVED === 'yes' &&
+  process.env.PRISMA_IMPORT_PRODUCTION_BRANCH === 'br-cool-heart-adq4jews' &&
+  target.hostname.endsWith('.neon.tech') &&
+  target.pathname === '/neondb';
 if (productionApply && !approvedProductionTarget)
-  throw new Error('Production import requires the approved production branch ID and exact neondb Neon target.');
+  throw new Error(
+    'Production import requires the approved production branch ID and exact neondb Neon target.',
+  );
 if (!productionApply && (!localTarget || process.env.NODE_ENV === 'production'))
-  throw new Error('Staging imports are restricted to 127.0.0.1:55433/nzk_marketplace_demo.');
+  throw new Error(
+    'Staging imports are restricted to 127.0.0.1:55433/nzk_marketplace_demo.',
+  );
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg(new Pool({ connectionString: dbUrl })),
@@ -257,19 +271,25 @@ async function ensureCategory(name: string, slug: string) {
 }
 
 async function apply(records: Extracted[]) {
-  const existingOwner = await prisma.user.findUnique({ where: { email: 'demo-content@system.invalid' } });
-  if (existingOwner && (!existingOwner.systemAccount || existingOwner.active))
-    throw new Error('Reserved demo owner email is already used by an active or non-demo account.');
-  const owner = existingOwner ?? await prisma.user.create({
-    data: {
-      email: 'demo-content@system.invalid',
-      name: 'Marketplace Demo Collection',
-      password: await bcrypt.hash(randomBytes(48).toString('hex'), 12),
-      active: false,
-      emailVerified: false,
-      systemAccount: true,
-    },
+  const existingOwner = await prisma.user.findUnique({
+    where: { email: 'demo-content@system.invalid' },
   });
+  if (existingOwner && (!existingOwner.systemAccount || existingOwner.active))
+    throw new Error(
+      'Reserved demo owner email is already used by an active or non-demo account.',
+    );
+  const owner =
+    existingOwner ??
+    (await prisma.user.create({
+      data: {
+        email: 'demo-content@system.invalid',
+        name: 'Marketplace Demo Collection',
+        password: await bcrypt.hash(randomBytes(48).toString('hex'), 12),
+        active: false,
+        emailVerified: false,
+        systemAccount: true,
+      },
+    }));
   const categoryIds = new Map<string, string>();
   for (const [, name, slug] of CATEGORY_MAP) {
     const category = await ensureCategory(name, slug);
@@ -309,9 +329,14 @@ async function apply(records: Extracted[]) {
         sourceRecordId: String(item.record.id),
       },
     };
-    const existingSourceAd = await prisma.ad.findUnique({ where: key, select: { id: true, demoContent: true } });
+    const existingSourceAd = await prisma.ad.findUnique({
+      where: key,
+      select: { id: true, demoContent: true },
+    });
     if (existingSourceAd && !existingSourceAd.demoContent)
-      throw new Error(`Source ID ${item.record.id} collides with a non-demo production listing.`);
+      throw new Error(
+        `Source ID ${item.record.id} collides with a non-demo production listing.`,
+      );
     const ad = await prisma.ad.upsert({
       where: key,
       update: {
@@ -397,9 +422,16 @@ async function main() {
     where: { sourceSystem: SOURCE, demoContent: true },
   });
   if (productionApply) {
-    const sourceRows = await prisma.ad.count({ where: { sourceSystem: SOURCE } });
-    if (sourceRows !== alreadyImported || (alreadyImported !== 0 && alreadyImported !== 22))
-      throw new Error(`Found ${sourceRows} source-keyed rows and ${alreadyImported} demos; expected none or exactly 22 verified demo listings.`);
+    const sourceRows = await prisma.ad.count({
+      where: { sourceSystem: SOURCE },
+    });
+    if (
+      sourceRows !== alreadyImported ||
+      (alreadyImported !== 0 && alreadyImported !== 22)
+    )
+      throw new Error(
+        `Found ${sourceRows} source-keyed rows and ${alreadyImported} demos; expected none or exactly 22 verified demo listings.`,
+      );
   }
   console.log(
     JSON.stringify(
@@ -432,7 +464,7 @@ async function main() {
       2,
     ),
   );
-  if (operation === '--apply')
+  if (operation === '--apply' || productionApply)
     console.log(`Imported/updated ${await apply(items)} demo records.`);
 }
 
