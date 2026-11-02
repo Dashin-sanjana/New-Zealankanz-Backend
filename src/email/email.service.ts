@@ -1,6 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import nodemailer from 'nodemailer';
+import type { Transporter } from 'nodemailer';
 
 type EmailPayload = {
   to: string;
@@ -9,7 +14,8 @@ type EmailPayload = {
   html: string;
 };
 
-const BRAND_COLOR = '#e7242e';
+const BRAND_COLOR = '#173b32';
+const BRAND_ACCENT = '#d4b45f';
 const BRAND_NAME = 'NewZealankans Marketplace';
 
 function layout(title: string, bodyHtml: string, siteUrl: string): string {
@@ -27,7 +33,7 @@ function layout(title: string, bodyHtml: string, siteUrl: string): string {
         <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
           <!-- Header -->
           <tr>
-            <td style="background:${BRAND_COLOR};border-radius:10px 10px 0 0;padding:24px 32px;">
+            <td style="background:${BRAND_COLOR};border-top:4px solid ${BRAND_ACCENT};border-radius:10px 10px 0 0;padding:24px 32px;">
               <a href="${siteUrl}" style="color:#fff;font-size:22px;font-weight:900;text-decoration:none;">
                 NZ &nbsp; ${BRAND_NAME}
               </a>
@@ -68,51 +74,148 @@ function para(text: string): string {
 }
 
 function adBox(title: string): string {
-  return `<div style="margin:20px 0;padding:16px 20px;background:#f8f9fb;border:1px solid #dce3e8;border-radius:8px;font-weight:700;color:#17212b;">${title}</div>`;
+  return `<div style="margin:20px 0;padding:16px 20px;background:#f8f9fb;border:1px solid #dce3e8;border-radius:8px;font-weight:700;color:#17212b;">${escapeHtml(title)}</div>`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    };
+    return entities[character] ?? character;
+  });
 }
 
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  private readonly transporter?: ReturnType<typeof nodemailer.createTransport>;
+  private readonly transporter?: Transporter;
   private readonly siteUrl: string;
 
   constructor(private readonly config: ConfigService) {
-    this.siteUrl =
-      this.config.get<string>('PUBLIC_SITE_URL') ?? 'https://newzealankans.nz';
-
-    const host = this.config.get<string>('SMTP_HOST');
-    const port = this.config.get<number>('SMTP_PORT');
-    const user = this.config.get<string>('SMTP_USER');
-    const pass = this.config.get<string>('SMTP_PASS');
-
-    if (host && port && user && pass) {
-      this.transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure: port === 465,
-        auth: { user, pass },
-      });
+    const configuredSiteUrl = this.config.get<string>('PUBLIC_SITE_URL');
+    const siteUrl = configuredSiteUrl ?? 'https://newzealankans.nz';
+    let parsedSiteUrl: URL;
+    try {
+      parsedSiteUrl = new URL(siteUrl);
+    } catch {
+      throw new Error('PUBLIC_SITE_URL must be a valid absolute URL.');
     }
-  }
+    if (
+      !['http:', 'https:'].includes(parsedSiteUrl.protocol) ||
+      (process.env.NODE_ENV === 'production' &&
+        parsedSiteUrl.protocol !== 'https:')
+    ) {
+      throw new Error('PUBLIC_SITE_URL must use HTTPS in production.');
+    }
+    this.siteUrl = parsedSiteUrl.origin;
 
-  async send(payload: EmailPayload) {
-    if (!this.transporter) {
-      this.logger.log(
-        `SMTP not configured. Stub email to ${payload.to}: ${payload.subject}`,
-      );
+    if (this.config.get<string>('EMAIL_TEST_TRANSPORT') === 'json') {
+      if (process.env.NODE_ENV !== 'test') {
+        throw new Error('EMAIL_TEST_TRANSPORT is available only in test mode.');
+      }
+      this.transporter = nodemailer.createTransport({ jsonTransport: true });
       return;
     }
 
-    await this.transporter.sendMail({
+    const host = this.config.get<string>('SMTP_HOST');
+    const portValue = this.config.get<string>('SMTP_PORT');
+    const port = portValue ? Number(portValue) : undefined;
+    const user = this.config.get<string>('SMTP_USER');
+    const pass = this.config.get<string>('SMTP_PASS');
+    const from = this.config.get<string>('SMTP_FROM');
+
+    const smtpConfigured = Boolean(host || portValue || user || pass || from);
+    if (
+      process.env.NODE_ENV === 'production' &&
+      smtpConfigured &&
+      !configuredSiteUrl
+    ) {
+      throw new Error(
+        'PUBLIC_SITE_URL must be configured when production email is enabled.',
+      );
+    }
+
+    if (
+      host &&
+      port &&
+      Number.isInteger(port) &&
+      port > 0 &&
+      port <= 65535 &&
+      user &&
+      pass &&
+      from
+    ) {
+      this.transporter = nodemailer.createTransport({
+        host,
+        port,
+        secure: this.booleanSetting('SMTP_SECURE', port === 465),
+        requireTLS: this.booleanSetting('SMTP_REQUIRE_TLS', port !== 465),
+        auth: { user, pass },
+        connectionTimeout: this.numberSetting(
+          'SMTP_CONNECTION_TIMEOUT_MS',
+          10_000,
+        ),
+        greetingTimeout: this.numberSetting('SMTP_GREETING_TIMEOUT_MS', 10_000),
+        socketTimeout: this.numberSetting('SMTP_SOCKET_TIMEOUT_MS', 30_000),
+        tls: { minVersion: 'TLSv1.2' },
+      });
+    } else if (smtpConfigured) {
+      throw new Error(
+        'SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM must be configured together.',
+      );
+    }
+  }
+
+  get isAvailable(): boolean {
+    return this.transporter !== undefined;
+  }
+
+  ensureAvailable(): void {
+    if (!this.isAvailable) {
+      throw new ServiceUnavailableException(
+        'Email delivery is temporarily unavailable.',
+      );
+    }
+  }
+
+  async send(payload: EmailPayload): Promise<unknown> {
+    const transporter = this.transporter;
+    if (!transporter) this.ensureAvailable();
+
+    const result: unknown = await transporter!.sendMail({
       from:
         this.config.get<string>('SMTP_FROM') ??
         `${BRAND_NAME} <no-reply@newzealankans.nz>`,
       ...payload,
     });
+    return result;
+  }
+
+  private booleanSetting(key: string, fallback: boolean): boolean {
+    const value = this.config.get<string>(key);
+    if (value === undefined || value === '') return fallback;
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    throw new Error(`${key} must be true or false.`);
+  }
+
+  private numberSetting(key: string, fallback: number): number {
+    const value = this.config.get<string>(key);
+    if (value === undefined || value === '') return fallback;
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 1000) {
+      throw new Error(`${key} must be an integer of at least 1000.`);
+    }
+    return parsed;
   }
 
   sendVerification(to: string, token: string) {
+    this.ensureAvailable();
     const verifyUrl = `${this.siteUrl}/verify-email?token=${token}`;
     return this.send({
       to,
@@ -134,6 +237,7 @@ export class EmailService {
   }
 
   sendPasswordReset(to: string, token: string) {
+    this.ensureAvailable();
     const resetUrl = `${this.siteUrl}/reset-password?token=${token}`;
     return this.send({
       to,
@@ -203,7 +307,7 @@ export class EmailService {
         heading('Your ad was not approved') +
           adBox(title) +
           (reason
-            ? para(`<strong>Reason:</strong> ${reason}`)
+            ? para(`<strong>Reason:</strong> ${escapeHtml(reason)}`)
             : para(
                 'Our team reviewed your listing and it did not meet our guidelines at this time.',
               )) +
@@ -248,5 +352,38 @@ export class EmailService {
         this.siteUrl,
       ),
     });
+  }
+
+  async sendListingEnquiry(input: {
+    to: string;
+    senderName: string;
+    senderEmail: string;
+    adTitle: string;
+    message: string;
+  }): Promise<boolean> {
+    if (!this.transporter) {
+      this.logger.log(
+        'SMTP is not configured; listing enquiry delivery was skipped.',
+      );
+      return false;
+    }
+    const senderName = escapeHtml(input.senderName);
+    const senderEmail = escapeHtml(input.senderEmail);
+    const adTitle = escapeHtml(input.adTitle);
+    const message = escapeHtml(input.message).replace(/\r?\n/g, '<br/>');
+    await this.send({
+      to: input.to,
+      subject: `New enquiry about ${input.adTitle.replace(/[\r\n]/g, ' ').slice(0, 160)}`,
+      text: `From: ${input.senderName} <${input.senderEmail}>\n\n${input.message}`,
+      html: layout(
+        'New Listing Enquiry',
+        heading('You have a new listing enquiry') +
+          para(`Listing: ${adTitle}`) +
+          para(`From: ${senderName} &lt;${senderEmail}&gt;`) +
+          para(message),
+        this.siteUrl,
+      ),
+    });
+    return true;
   }
 }

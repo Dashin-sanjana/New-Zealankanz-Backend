@@ -24,6 +24,20 @@ async function upsertCategory(name: string, parentId?: string) {
 }
 
 async function main() {
+  const target = new URL(connectionString);
+  const isIsolatedTestDatabase =
+    ['localhost', '127.0.0.1', '::1'].includes(target.hostname) &&
+    target.pathname === '/nzk_test';
+  if (
+    process.env.NODE_ENV === 'production' ||
+    !isIsolatedTestDatabase ||
+    process.env.ALLOW_DESTRUCTIVE_SEED !== '1'
+  ) {
+    throw new Error(
+      'Seed refused: destructive seed operations require ALLOW_DESTRUCTIVE_SEED=1 and the isolated local nzk_test database.',
+    );
+  }
+
   const adminEmail = process.env.DEFAULT_ADMIN_EMAIL ?? 'admin@newzealankans.local';
   const adminPassword = process.env.DEFAULT_ADMIN_PASSWORD ?? 'Admin123!';
   const includeSampleData = process.env.INCLUDE_SAMPLE_DATA === 'true';

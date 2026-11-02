@@ -5,17 +5,23 @@
   "author": "",
   "private": true,
   "license": "UNLICENSED",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "build": "prisma generate && nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate": "node scripts/prisma-safe-migrate.mjs dev",
+    "prisma:migrate:deploy": "node scripts/prisma-safe-migrate.mjs deploy",
+    "prisma:migrate:baseline:resolve": "node scripts/prisma-safe-migrate.mjs resolve-baseline",
     "prisma:seed": "ts-node prisma/seed.ts",
+    "prisma:seed:demo": "ts-node prisma/seed-demo.ts",
     "dev": "nest start --watch",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/main",
+    "start:prod": "node dist/src/main.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -27,6 +33,7 @@
     "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1159.0",
     "@nestjs/cache-manager": "^3.0.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
@@ -36,8 +43,8 @@
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/swagger": "^11.4.4",
     "@nestjs/throttler": "^6.5.0",
-    "@prisma/adapter-pg": "^7.8.0",
-    "@prisma/client": "^7.8.0",
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
     "bcrypt": "^6.0.0",
     "cache-manager": "^6.4.2",
     "class-transformer": "^0.5.1",
@@ -45,14 +52,14 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "helmet": "^8.2.0",
-    "multer": "^2.2.0",
-    "nodemailer": "^9.0.1",
+    "multer": "^2.5.0",
+    "nodemailer": "^10.3.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pg": "^8.22.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "sharp": "^0.33.5",
+    "sharp": "^0.35.5",
     "slugify": "^1.6.9"
   },
   "devDependencies": {
@@ -77,7 +84,7 @@
     "globals": "^17.0.0",
     "jest": "^30.0.0",
     "prettier": "^3.4.2",
-    "prisma": "^7.8.0",
+    "prisma": "^7.10.1",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
     "ts-jest": "^29.2.5",
@@ -105,6 +112,20 @@
     "testEnvironment": "node"
   },
   "pnpm": {
+    "overrides": {
+      "body-parser": "2.4.0",
+      "brace-expansion@1": "1.1.21",
+      "brace-expansion@2": "2.1.7",
+      "brace-expansion@5": "5.0.12",
+      "browserslist": "4.28.7",
+      "fast-uri": "3.1.9",
+      "handlebars": "4.7.10",
+      "js-yaml": "4.3.2",
+      "multer": "2.5.0",
+      "proxy-addr": "2.0.8",
+      "qs": "6.17.1",
+      "baseline-browser-mapping": "2.11.0"
+    },
     "onlyBuiltDependencies": [
       "sharp",
       "prisma",

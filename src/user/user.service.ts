@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
@@ -60,7 +64,10 @@ export class UserService {
     if (!valid) throw new BadRequestException('Current password is incorrect');
     await this.prisma.user.update({
       where: { id },
-      data: { password: await bcrypt.hash(dto.newPassword, 12) },
+      data: {
+        password: await bcrypt.hash(dto.newPassword, 12),
+        sessionVersion: { increment: 1 },
+      },
     });
     return { message: 'Password changed successfully' };
   }
@@ -68,7 +75,10 @@ export class UserService {
   setActive(id: string, active: boolean) {
     return this.prisma.user.update({
       where: { id },
-      data: { active },
+      data: {
+        active,
+        ...(!active ? { sessionVersion: { increment: 1 } } : {}),
+      },
       select: userSelect,
     });
   }
@@ -76,7 +86,7 @@ export class UserService {
   setRole(id: string, role: UserRole) {
     return this.prisma.user.update({
       where: { id },
-      data: { role },
+      data: { role, sessionVersion: { increment: 1 } },
       select: userSelect,
     });
   }

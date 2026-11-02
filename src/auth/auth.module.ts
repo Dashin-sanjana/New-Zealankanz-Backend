@@ -9,6 +9,7 @@ import { NotificationModule } from '../notification/notification.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
+import { getJwtSecret } from '../common/runtime-config';
 
 @Module({
   imports: [
@@ -20,7 +21,7 @@ import { JwtStrategy } from './jwt.strategy';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('JWT_SECRET') ?? 'dev-jwt-secret',
+        secret: getJwtSecret(),
         signOptions: {
           expiresIn: (config.get<string>('JWT_EXPIRES_IN') ??
             '7d') as JwtSignOptions['expiresIn'],

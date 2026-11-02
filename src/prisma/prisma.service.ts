@@ -12,7 +12,7 @@ export class PrismaService
   constructor() {
     const connectionString = getDatabaseUrl();
     const pool = new Pool({ connectionString });
-    const adapter = new PrismaPg(pool);
+    const adapter = new PrismaPg(pool, { disposeExternalPool: true });
     super({ adapter });
   }
 

@@ -7,7 +7,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { NotificationType } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { NotificationService } from '../notification/notification.service';
@@ -29,6 +29,7 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto) {
+    this.mail.ensureAvailable();
     const existing = await this.prisma.user.findUnique({
       where: { email: dto.email.toLowerCase() },
     });
@@ -43,16 +44,25 @@ export class AuthService {
       },
     });
     const token = await this.createEmailVerificationToken(user.id);
-    this.notifications.create({
-      userId: user.id,
-      type: NotificationType.EMAIL_VERIFICATION,
-      title: 'Verify your email',
-      message: 'A verification token was issued for your account.',
-    }).catch((e) => this.logger.warn(`Notification failed: ${e}`));
-    this.mail.sendVerification(user.email, token)
-      .catch((e) => this.logger.warn(`Verification email failed: ${e}`));
+    this.notifications
+      .create({
+        userId: user.id,
+        type: NotificationType.EMAIL_VERIFICATION,
+        title: 'Verify your email',
+        message: 'A verification token was issued for your account.',
+      })
+      .catch(() =>
+        this.logger.warn('Registration notification delivery failed.'),
+      );
+    await this.mail.sendVerification(user.email, token);
 
-    return { user: this.publicUser(user) };
+    return {
+      user: this.publicUser(user),
+      ...(process.env.NODE_ENV === 'demo' &&
+      process.env.DEMO_EMAIL_VERIFICATION === 'true'
+        ? { demoVerificationToken: token }
+        : {}),
+    };
   }
 
   async login(dto: LoginDto) {
@@ -68,12 +78,14 @@ export class AuthService {
       sub: user.id,
       email: user.email,
       role: user.role,
+      sessionVersion: user.sessionVersion,
     });
 
     return { accessToken, user: this.publicUser(user) };
   }
 
   async forgotPassword(dto: ForgotPasswordDto) {
+    this.mail.ensureAvailable();
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email.toLowerCase() },
     });
@@ -83,80 +95,96 @@ export class AuthService {
     const token = randomBytes(32).toString('hex');
     await this.prisma.passwordResetToken.create({
       data: {
-        token,
+        token: this.hashToken(token),
         userId: user.id,
         expiresAt: new Date(Date.now() + 1000 * 60 * 60),
       },
     });
-    this.notifications.create({
-      userId: user.id,
-      type: NotificationType.PASSWORD_RESET_REQUESTED,
-      title: 'Password reset requested',
-      message: 'A password reset token was issued for your account.',
-    }).catch((e) => this.logger.warn(`Notification failed: ${e}`));
-    this.mail.sendPasswordReset(user.email, token)
-      .catch((e) => this.logger.warn(`Password reset email failed: ${e}`));
+    try {
+      await this.mail.sendPasswordReset(user.email, token);
+    } catch (error) {
+      await this.prisma.passwordResetToken
+        .delete({ where: { token: this.hashToken(token) } })
+        .catch(() => undefined);
+      throw error;
+    }
+    this.notifications
+      .create({
+        userId: user.id,
+        type: NotificationType.PASSWORD_RESET_REQUESTED,
+        title: 'Password reset requested',
+        message: 'A password reset token was issued for your account.',
+      })
+      .catch(() =>
+        this.logger.warn('Password reset notification delivery failed.'),
+      );
     return {
       message: 'If the email exists, a reset token was sent',
     };
   }
 
   async resetPassword(dto: ResetPasswordDto) {
-    const token = await this.prisma.passwordResetToken.findUnique({
-      where: { token: dto.token },
+    this.mail.ensureAvailable();
+    const token = await this.prisma.passwordResetToken.findFirst({
+      where: { token: { in: [this.hashToken(dto.token), dto.token] } },
       include: { user: true },
     });
     if (!token || token.usedAt || token.expiresAt < new Date()) {
       throw new BadRequestException('Invalid or expired reset token');
     }
 
-    await this.prisma.$transaction([
-      this.prisma.user.update({
+    const password = await bcrypt.hash(dto.password, 12);
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.user.update({
         where: { id: token.userId },
-        data: { password: await bcrypt.hash(dto.password, 12) },
-      }),
-      this.prisma.passwordResetToken.update({
+        data: { password, sessionVersion: { increment: 1 } },
+      });
+      await transaction.passwordResetToken.update({
         where: { id: token.id },
         data: { usedAt: new Date() },
-      }),
-    ]);
+      });
+    });
     return { message: 'Password reset successful' };
   }
 
   async verifyEmail(tokenValue: string) {
-    const token = await this.prisma.emailVerificationToken.findUnique({
-      where: { token: tokenValue },
+    this.mail.ensureAvailable();
+    const token = await this.prisma.emailVerificationToken.findFirst({
+      where: { token: { in: [this.hashToken(tokenValue), tokenValue] } },
     });
     if (!token || token.usedAt || token.expiresAt < new Date()) {
       throw new BadRequestException('Invalid or expired verification token');
     }
-    await this.prisma.$transaction([
-      this.prisma.user.update({
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.user.update({
         where: { id: token.userId },
         data: { emailVerified: true },
-      }),
-      this.prisma.emailVerificationToken.update({
+      });
+      await transaction.emailVerificationToken.update({
         where: { id: token.id },
         data: { usedAt: new Date() },
-      }),
-    ]);
+      });
+    });
     return { message: 'Email verified' };
   }
 
-  logout() {
-    return {
-      message:
-        'Logout is client-side for stateless JWTs. Remove the access token on the client.',
-    };
+  async logout(userId: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { sessionVersion: { increment: 1 } },
+    });
+    return { message: 'Logout successful' };
   }
 
   async resendVerification(dto: ResendVerificationDto) {
+    this.mail.ensureAvailable();
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email.toLowerCase() },
     });
     if (!user) {
       return {
-        message: 'If the email is registered, a new verification link has been sent.',
+        message:
+          'If the email is registered, a new verification link has been sent.',
       };
     }
     if (user.emailVerified) {
@@ -164,14 +192,17 @@ export class AuthService {
     }
 
     const token = await this.createEmailVerificationToken(user.id);
-    this.notifications.create({
-      userId: user.id,
-      type: NotificationType.EMAIL_VERIFICATION,
-      title: 'Verify your email',
-      message: 'A verification token was issued for your account.',
-    }).catch((e) => this.logger.warn(`Notification failed: ${e}`));
-    this.mail.sendVerification(user.email, token)
-      .catch((e) => this.logger.warn(`Verification email failed: ${e}`));
+    this.notifications
+      .create({
+        userId: user.id,
+        type: NotificationType.EMAIL_VERIFICATION,
+        title: 'Verify your email',
+        message: 'A verification token was issued for your account.',
+      })
+      .catch(() =>
+        this.logger.warn('Verification notification delivery failed.'),
+      );
+    await this.mail.sendVerification(user.email, token);
 
     return { message: 'Verification email sent successfully.' };
   }
@@ -180,12 +211,16 @@ export class AuthService {
     const token = randomBytes(32).toString('hex');
     await this.prisma.emailVerificationToken.create({
       data: {
-        token,
+        token: this.hashToken(token),
         userId,
         expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
       },
     });
     return token;
+  }
+
+  private hashToken(token: string) {
+    return createHash('sha256').update(token).digest('hex');
   }
 
   private publicUser(user: {

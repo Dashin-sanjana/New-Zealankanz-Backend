@@ -5,7 +5,11 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import type { CurrentUser } from '../common/current-user.type';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { ChangePasswordDto, UpdateProfileDto, UpdateUserRoleDto } from './dto/user.dto';
+import {
+  ChangePasswordDto,
+  UpdateProfileDto,
+  UpdateUserRoleDto,
+} from './dto/user.dto';
 import { UserService } from './user.service';
 
 @UseGuards(JwtAuthGuard)

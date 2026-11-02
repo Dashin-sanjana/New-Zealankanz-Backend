@@ -55,7 +55,9 @@ export class BannerService {
 
   private data(dto: BannerDto): Prisma.BannerUncheckedCreateInput {
     return {
+      sponsor: dto.sponsor,
       title: dto.title,
+      description: dto.description,
       placement: dto.placement,
       imageUrl: dto.imageUrl,
       linkUrl: dto.linkUrl,

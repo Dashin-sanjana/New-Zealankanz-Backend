@@ -44,68 +44,104 @@ model User {
   role                    UserRole                 @default(USER)
   active                  Boolean                  @default(true)
   emailVerified           Boolean                  @default(false)
+  sessionVersion          Int                      @default(0)
+  systemAccount           Boolean                  @default(false)
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
   ads                     Ad[]
   notifications           Notification[]
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
+  watchlist               Watchlist[]
+  savedSearches           SavedSearch[]
 }
 
 model Category {
-  id          String     @id @default(cuid())
-  name        String
-  slug        String     @unique
-  description String?
-  metaTitle   String?
+  id              String     @id @default(cuid())
+  name            String
+  slug            String     @unique
+  description     String?
+  metaTitle       String?
   metaDescription String?
-  parentId    String?
-  parent      Category?  @relation("CategoryChildren", fields: [parentId], references: [id], onDelete: SetNull)
-  children    Category[] @relation("CategoryChildren")
-  ads         Ad[]
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  parentId        String?
+  parent          Category?  @relation("CategoryChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children        Category[] @relation("CategoryChildren")
+  ads             Ad[]
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
 }
 
 model Location {
-  id          String   @id @default(cuid())
-  name        String
-  slug        String   @unique
-  metaTitle   String?
+  id              String   @id @default(cuid())
+  name            String
+  slug            String   @unique
+  metaTitle       String?
   metaDescription String?
-  ads         Ad[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  ads             Ad[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model Ad {
-  id              String    @id @default(cuid())
-  title           String
-  slug            String    @unique
-  description     String
-  price           Decimal?  @db.Decimal(12, 2)
-  contactName     String?
-  contactEmail    String?
-  contactPhone    String?
-  status          AdStatus  @default(PENDING)
-  rejectionReason String?
-  featured        Boolean   @default(false)
-  expiresAt       DateTime?
-  metaTitle       String?
-  metaDescription String?
-  userId          String
-  categoryId      String
-  locationId      String
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  category        Category  @relation(fields: [categoryId], references: [id])
-  location        Location  @relation(fields: [locationId], references: [id])
-  images          AdImage[]
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                 String              @id @default(cuid())
+  title              String
+  slug               String              @unique
+  description        String
+  attributes         Json?               @db.JsonB
+  price              Decimal?            @db.Decimal(12, 2)
+  contactName        String?
+  contactEmail       String?
+  contactPhone       String?
+  demoContent        Boolean             @default(false)
+  sourceSystem       String?
+  sourceRecordId     String?
+  sourceUrl          String?
+  priceCurrency      String?
+  priceLabel         String?
+  priceType          String?
+  status             AdStatus            @default(PENDING)
+  rejectionReason    String?
+  featured           Boolean             @default(false)
+  expiresAt          DateTime?
+  metaTitle          String?
+  metaDescription    String?
+  userId             String
+  categoryId         String
+  locationId         String?
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category           Category            @relation(fields: [categoryId], references: [id])
+  location           Location?           @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  images             AdImage[]
+  watchlist          Watchlist[]
+  contactSubmissions ContactSubmission[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   @@index([status, featured, createdAt])
   @@index([categoryId])
   @@index([locationId])
+  @@index([status, categoryId, locationId, createdAt, id])
+  @@index([status, categoryId, createdAt, id])
+  @@index([status, locationId, createdAt, id])
+  @@index([status, price, createdAt, id])
+  @@index([status, createdAt, id])
+  @@unique([sourceSystem, sourceRecordId])
+  @@index([demoContent, status, createdAt])
+  @@index([attributes], type: Gin, map: "Ad_attributes_gin_idx")
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "Ad_title_trgm_idx")
+  @@index([description(ops: raw("gin_trgm_ops"))], type: Gin, map: "Ad_description_trgm_idx")
+}
+
+model SavedSearch {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  query     Json     @db.JsonB
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId, createdAt])
 }
 
 model AdImage {
@@ -113,11 +149,24 @@ model AdImage {
   adId      String
   url       String
   filename  String
-  mimetype  String
-  size      Int
+  mimetype  String?
+  size      Int?
   sortOrder Int      @default(0)
   ad        Ad       @relation(fields: [adId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
+}
+
+model Watchlist {
+  id        String   @id @default(cuid())
+  userId    String
+  adId      String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ad        Ad       @relation(fields: [adId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, adId])
+  @@index([adId])
+  @@index([userId, createdAt])
 }
 
 model Notification {
@@ -132,16 +181,18 @@ model Notification {
 }
 
 model Banner {
-  id        String          @id @default(cuid())
-  title     String
-  placement BannerPlacement
-  imageUrl  String
-  linkUrl   String?
-  active    Boolean         @default(true)
-  startDate DateTime?
-  endDate   DateTime?
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
+  id          String          @id @default(cuid())
+  sponsor     String?
+  title       String
+  description String?
+  placement   BannerPlacement
+  imageUrl    String
+  linkUrl     String?
+  active      Boolean         @default(true)
+  startDate   DateTime?
+  endDate     DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 }
 
 model ContactSubmission {
@@ -150,26 +201,30 @@ model ContactSubmission {
   email     String
   subject   String
   message   String
+  adId      String?
+  ad        Ad?       @relation(fields: [adId], references: [id], onDelete: SetNull)
   readAt    DateTime?
   createdAt DateTime  @default(now())
+
+  @@index([adId, createdAt])
 }
 
 model PasswordResetToken {
-  id        String   @id @default(cuid())
-  token     String   @unique
+  id        String    @id @default(cuid())
+  token     String    @unique
   userId    String
   expiresAt DateTime
   usedAt    DateTime?
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
 }
 
 model EmailVerificationToken {
-  id        String   @id @default(cuid())
-  token     String   @unique
+  id        String    @id @default(cuid())
+  token     String    @unique
   userId    String
   expiresAt DateTime
   usedAt    DateTime?
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
 }

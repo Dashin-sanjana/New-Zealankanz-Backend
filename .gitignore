@@ -5,6 +5,7 @@
 # Env files
 .env
 .env.local
+.env.demo.local
 
 # IDEs and editors
 /.idea
@@ -23,3 +24,5 @@ Thumbs.db
 
 # Uploads / storage
 /uploads
+.vercel
+.env*

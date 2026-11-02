@@ -1,4 +1,6 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { CurrentUserDecorator } from './decorators/current-user.decorator';
+import type { CurrentUser } from '../common/current-user.type';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthService } from './auth.service';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
@@ -43,7 +45,7 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Post('logout')
-  logout() {
-    return this.auth.logout();
+  logout(@CurrentUserDecorator() user: CurrentUser) {
+    return this.auth.logout(user.id);
   }
 }

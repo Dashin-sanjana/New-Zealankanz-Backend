@@ -6,11 +6,23 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  MaxLength,
 } from 'class-validator';
 
 export class BannerDto {
+  @IsOptional()
   @IsString()
+  @MaxLength(120)
+  sponsor?: string;
+
+  @IsString()
+  @MaxLength(160)
   title!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  description?: string;
 
   @IsEnum(BannerPlacement)
   placement!: BannerPlacement;
