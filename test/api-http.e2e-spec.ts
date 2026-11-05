@@ -52,6 +52,7 @@ function httpServer(app: INestApplication): Server {
   let issuedVerificationToken = '';
   let issuedPasswordResetToken = '';
   const mailer = {
+    ensureAvailable: jest.fn(),
     sendVerification: jest.fn((_to: string, token: string) => {
       issuedVerificationToken = token;
       return Promise.resolve();
@@ -308,7 +309,7 @@ function httpServer(app: INestApplication): Server {
       .get(`/api/ads/slug/${approvedAd.slug}`)
       .expect(200);
     const details = readBody<{ user: Record<string, unknown> }>(listingDetails);
-    expect(Object.hasOwn(details.user, 'email')).toBe(false);
+    expect(details.user).toBeUndefined();
 
     const posted = await request(server)
       .post('/api/ads')

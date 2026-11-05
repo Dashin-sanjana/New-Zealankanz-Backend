@@ -245,7 +245,7 @@ if (process.env.RUN_DATABASE_INTEGRATION === '1' && !enabled) {
       });
       expect(parentQuery.meta.total).toBe(10000);
       expect(childQuery.meta.total).toBe(10000);
-      expect(parentQuery.data[0]?.categoryId).toBe(childCategoryId);
+      expect(parentQuery.data[0]?.category.id).toBe(childCategoryId);
     }, 120000);
 
     it('enforces Watchlist uniqueness and user-scoped operations on PostgreSQL', async () => {
@@ -272,7 +272,10 @@ if (process.env.RUN_DATABASE_INTEGRATION === '1' && !enabled) {
         const sendListingEnquiry = jest.fn().mockResolvedValue(true);
         const contact = new ContactService(
           prisma,
-          { sendListingEnquiry } as unknown as EmailService,
+          {
+            ensureAvailable: jest.fn(),
+            sendListingEnquiry,
+          } as unknown as EmailService,
           new ConfigService({ ADMIN_EMAIL: '' }),
         );
         const receipt = await contact.submit({
