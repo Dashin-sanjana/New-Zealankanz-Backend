@@ -24,11 +24,14 @@ if (
     '--dry-run',
     '--apply',
     '--rollback',
+    '--staging-dry-run',
+    '--staging-apply',
+    '--production-dry-run',
     '--production-apply',
   ].includes(operation)
 )
   throw new Error(
-    'Use --validate-only, --dry-run, --apply, --rollback, or gated --production-apply.',
+    'Use --validate-only, --dry-run, --apply, --rollback, or a gated staging/production operation.',
   );
 const manifestArgument = args.indexOf('--manifest');
 const manifestPath =
@@ -72,21 +75,44 @@ const localTarget =
   target.port === '55433' &&
   target.pathname === '/nzk_marketplace_demo';
 const productionApply = operation === '--production-apply';
+const productionDryRun = operation === '--production-dry-run';
+const productionOperation = productionApply || productionDryRun;
+const stagingApply = operation === '--staging-apply';
+const stagingDryRun = operation === '--staging-dry-run';
+const stagingOperation = stagingApply || stagingDryRun;
+const updateOnlyApply = productionApply || stagingApply;
 const approvedProductionTarget =
-  productionApply &&
+  productionOperation &&
   process.env.PRISMA_IMPORT_PRODUCTION_APPROVED === 'yes' &&
   process.env.PRISMA_IMPORT_PRODUCTION_IDENTITY_VERIFIED === 'yes' &&
   process.env.PRISMA_IMPORT_RECOVERY_VERIFIED === 'yes' &&
   process.env.PRISMA_IMPORT_PRODUCTION_PROJECT === 'wispy-mouse-76602888' &&
   process.env.PRISMA_IMPORT_PRODUCTION_BRANCH === 'br-cool-heart-adq4jews' &&
-  process.env.PRISMA_IMPORT_RECOVERY_BRANCH === 'br-twilight-sound-adtnzh8b' &&
+  process.env.PRISMA_IMPORT_RECOVERY_BRANCH === 'br-steep-sunset-adjv2qev' &&
+  process.env.PRISMA_IMPORT_PRODUCTION_HOST === target.hostname &&
   target.hostname.endsWith('.neon.tech') &&
   target.pathname === '/neondb';
-if (productionApply && !approvedProductionTarget)
+const approvedStagingTarget =
+  stagingOperation &&
+  process.env.PRISMA_IMPORT_STAGING_APPROVED === 'yes' &&
+  process.env.PRISMA_IMPORT_STAGING_PROJECT === 'wispy-mouse-76602888' &&
+  process.env.PRISMA_IMPORT_STAGING_BRANCH === 'br-round-surf-adpw4b3k' &&
+  process.env.PRISMA_IMPORT_STAGING_HOST === target.hostname &&
+  target.hostname.endsWith('.neon.tech') &&
+  target.pathname === '/neondb';
+if (productionOperation && !approvedProductionTarget)
   throw new Error(
     'Production import requires verified target identity and recovery branch acknowledgements.',
   );
-if (!productionApply && (!localTarget || process.env.NODE_ENV === 'production'))
+if (stagingOperation && !approvedStagingTarget)
+  throw new Error(
+    'Staging operation requires the exact disposable Neon project, branch, and endpoint acknowledgement.',
+  );
+if (
+  !productionOperation &&
+  !stagingOperation &&
+  (!localTarget || process.env.NODE_ENV === 'production')
+)
   throw new Error(
     'Staging imports are restricted to 127.0.0.1:55433/nzk_marketplace_demo.',
   );
@@ -108,124 +134,123 @@ async function ensureCategory(
 }
 
 async function apply(records: WordPressDemoRecord[]) {
-  return prisma.$transaction(async (tx) => {
-    if (productionApply) {
-      const current = await tx.ad.findMany({
-        where: { sourceSystem: SOURCE },
-        select: { sourceRecordId: true, demoContent: true },
-      });
-      const expectedIds = new Set(
-        records.map((record) => String(record.sourceId)),
-      );
-      if (
-        current.length !== records.length ||
-        current.some(
-          (row) =>
-            !row.demoContent ||
-            !row.sourceRecordId ||
-            !expectedIds.has(row.sourceRecordId),
-        ) ||
-        new Set(current.map((row) => row.sourceRecordId)).size !==
-          records.length
-      ) {
-        throw new Error(
-          'Production transaction requires exactly 22 unique existing demo source IDs; no creates are allowed.',
+  return prisma.$transaction(
+    async (tx) => {
+      if (updateOnlyApply) {
+        const current = await tx.ad.findMany({
+          where: { sourceSystem: SOURCE },
+          select: { sourceRecordId: true, demoContent: true },
+        });
+        const expectedIds = new Set(
+          records.map((record) => String(record.sourceId)),
         );
-      }
-    }
-    // Production reconciliation is update-only. It preserves the current owner of
-    // each already imported demo record and cannot create users or listings.
-    let ownerId: string | undefined;
-    if (!productionApply) {
-      const existingOwner = await tx.user.findUnique({
-        where: { email: 'demo-content@system.invalid' },
-      });
-      if (
-        existingOwner &&
-        (!existingOwner.systemAccount || existingOwner.active)
-      )
-        throw new Error(
-          'Reserved demo owner email is already used by an active or non-demo account.',
-        );
-      const owner =
-        existingOwner ??
-        (await tx.user.create({
-          data: {
-            email: 'demo-content@system.invalid',
-            name: 'Marketplace Demo Collection',
-            password: await bcrypt.hash(randomBytes(48).toString('hex'), 12),
-            active: false,
-            emailVerified: false,
-            systemAccount: true,
-          },
-        }));
-      ownerId = owner.id;
-    }
-    const categoryIds = new Map<string, string>();
-    for (const { name, slug } of new Map(
-      records.map((item) => [
-        item.categorySlug,
-        { name: item.categoryName, slug: item.categorySlug },
-      ]),
-    ).values()) {
-      const category = await ensureCategory(tx, name, slug);
-      categoryIds.set(slug, category.id);
-    }
-    let imported = 0;
-    for (const item of records) {
-      const location = item.location
-        ? await tx.location.upsert({
-            where: {
-              slug: item.location
-                .toLocaleLowerCase()
-                .replace(/[^a-z0-9]+/g, '-')
-                .replace(/^-|-$/g, ''),
-            },
-            update: {},
-            create: {
-              name: item.location,
-              slug: item.location
-                .toLocaleLowerCase()
-                .replace(/[^a-z0-9]+/g, '-')
-                .replace(/^-|-$/g, ''),
-            },
-          })
-        : null;
-      const attributes = {
-        _sourceCategories: item.categories,
-        _sourceCurrencySymbol: item.currencySymbol,
-        _sourcePriceOriginal: item.price,
-        _sourcePriceType: item.priceType,
-        _sourceDate: item.publishedAt?.toISOString() || null,
-      } as Prisma.InputJsonValue;
-      const key = {
-        sourceSystem_sourceRecordId: {
-          sourceSystem: SOURCE,
-          sourceRecordId: String(item.sourceId),
-        },
-      };
-      const existingSourceAd = await tx.ad.findUnique({
-        where: key,
-        select: { id: true, demoContent: true, sourceUrl: true },
-      });
-      if (existingSourceAd && !existingSourceAd.demoContent)
-        throw new Error(
-          `Source ID ${item.sourceId} collides with a non-demo listing.`,
-        );
-      if (existingSourceAd?.sourceUrl) {
-        const existingPath = new URL(existingSourceAd.sourceUrl).pathname;
-        if (!existingPath.includes(`/ad/${item.slug}/`))
+        if (
+          current.length !== records.length ||
+          current.some(
+            (row) =>
+              !row.demoContent ||
+              !row.sourceRecordId ||
+              !expectedIds.has(row.sourceRecordId),
+          ) ||
+          new Set(current.map((row) => row.sourceRecordId)).size !==
+            records.length
+        ) {
           throw new Error(
-            `Source ID ${item.sourceId} has a conflicting source URL.`,
+            'Production transaction requires exactly 22 unique existing demo source IDs; no creates are allowed.',
           );
+        }
       }
-      if (productionApply && !existingSourceAd)
-        throw new Error(
-          `Production update-only reconciliation cannot create source ID ${item.sourceId}.`,
-        );
-      await tx.ad.upsert({
-        where: key,
-        update: {
+      // Production reconciliation is update-only. It preserves the current owner of
+      // each already imported demo record and cannot create users or listings.
+      let ownerId: string | undefined;
+      if (!updateOnlyApply) {
+        const existingOwner = await tx.user.findUnique({
+          where: { email: 'demo-content@system.invalid' },
+        });
+        if (
+          existingOwner &&
+          (!existingOwner.systemAccount || existingOwner.active)
+        )
+          throw new Error(
+            'Reserved demo owner email is already used by an active or non-demo account.',
+          );
+        const owner =
+          existingOwner ??
+          (await tx.user.create({
+            data: {
+              email: 'demo-content@system.invalid',
+              name: 'Marketplace Demo Collection',
+              password: await bcrypt.hash(randomBytes(48).toString('hex'), 12),
+              active: false,
+              emailVerified: false,
+              systemAccount: true,
+            },
+          }));
+        ownerId = owner.id;
+      }
+      const categoryIds = new Map<string, string>();
+      for (const { name, slug } of new Map(
+        records.map((item) => [
+          item.categorySlug,
+          { name: item.categoryName, slug: item.categorySlug },
+        ]),
+      ).values()) {
+        const category = await ensureCategory(tx, name, slug);
+        categoryIds.set(slug, category.id);
+      }
+      let imported = 0;
+      for (const item of records) {
+        const location = item.location
+          ? await tx.location.upsert({
+              where: {
+                slug: item.location
+                  .toLocaleLowerCase()
+                  .replace(/[^a-z0-9]+/g, '-')
+                  .replace(/^-|-$/g, ''),
+              },
+              update: {},
+              create: {
+                name: item.location,
+                slug: item.location
+                  .toLocaleLowerCase()
+                  .replace(/[^a-z0-9]+/g, '-')
+                  .replace(/^-|-$/g, ''),
+              },
+            })
+          : null;
+        const attributes = {
+          _sourceCategories: item.categories,
+          _sourceCurrencySymbol: item.currencySymbol,
+          _sourcePriceOriginal: item.price,
+          _sourcePriceType: item.priceType,
+          _sourceDate: item.publishedAt?.toISOString() || null,
+        } as Prisma.InputJsonValue;
+        const key = {
+          sourceSystem_sourceRecordId: {
+            sourceSystem: SOURCE,
+            sourceRecordId: String(item.sourceId),
+          },
+        };
+        const existingSourceAd = await tx.ad.findUnique({
+          where: key,
+          select: { id: true, demoContent: true, sourceUrl: true },
+        });
+        if (existingSourceAd && !existingSourceAd.demoContent)
+          throw new Error(
+            `Source ID ${item.sourceId} collides with a non-demo listing.`,
+          );
+        if (existingSourceAd?.sourceUrl) {
+          const existingPath = new URL(existingSourceAd.sourceUrl).pathname;
+          if (!existingPath.includes(`/ad/${item.slug}/`))
+            throw new Error(
+              `Source ID ${item.sourceId} has a conflicting source URL.`,
+            );
+        }
+        if (updateOnlyApply && !existingSourceAd)
+          throw new Error(
+            `Update-only reconciliation cannot create source ID ${item.sourceId}.`,
+          );
+        const updateData: Prisma.AdUncheckedUpdateInput = {
           title: item.title,
           description: item.description,
           categoryId: categoryIds.get(item.categorySlug)!,
@@ -240,34 +265,47 @@ async function apply(records: WordPressDemoRecord[]) {
           sourceUrl: item.sourceUrl,
           attributes,
           ...(item.publishedAt ? { createdAt: item.publishedAt } : {}),
-        },
-        create: {
-          title: item.title,
-          slug: `${item.slug}-demo`,
-          description: item.description,
-          categoryId: categoryIds.get(item.categorySlug)!,
-          locationId: location?.id ?? null,
-          price: item.price === null ? null : new Prisma.Decimal(item.price),
-          priceCurrency: item.priceCurrency,
-          priceLabel: item.priceLabel,
-          priceType: item.priceType,
-          status: AdStatus.APPROVED,
-          featured: item.featured,
-          demoContent: true,
-          sourceSystem: SOURCE,
-          sourceRecordId: String(item.sourceId),
-          sourceUrl: item.sourceUrl,
-          userId: ownerId!,
-          attributes,
-          ...(item.publishedAt ? { createdAt: item.publishedAt } : {}),
-        },
-      });
-      // Source media URLs are unverified references. Do not import them or alter
-      // any previously stored image references during reconciliation.
-      imported++;
-    }
-    return imported;
-  });
+        };
+        if (updateOnlyApply) {
+          await tx.ad.update({
+            where: { id: existingSourceAd!.id },
+            data: updateData,
+          });
+        } else {
+          await tx.ad.upsert({
+            where: key,
+            update: updateData,
+            create: {
+              title: item.title,
+              slug: `${item.slug}-demo`,
+              description: item.description,
+              categoryId: categoryIds.get(item.categorySlug)!,
+              locationId: location?.id ?? null,
+              price:
+                item.price === null ? null : new Prisma.Decimal(item.price),
+              priceCurrency: item.priceCurrency,
+              priceLabel: item.priceLabel,
+              priceType: item.priceType,
+              status: AdStatus.APPROVED,
+              featured: item.featured,
+              demoContent: true,
+              sourceSystem: SOURCE,
+              sourceRecordId: String(item.sourceId),
+              sourceUrl: item.sourceUrl,
+              userId: ownerId!,
+              attributes,
+              ...(item.publishedAt ? { createdAt: item.publishedAt } : {}),
+            },
+          });
+        }
+        // Source media URLs are unverified references. Do not import them or alter
+        // any previously stored image references during reconciliation.
+        imported++;
+      }
+      return imported;
+    },
+    { maxWait: 10000, timeout: 60000 },
+  );
 }
 
 async function rollback() {
@@ -357,7 +395,8 @@ async function main() {
     )
     .map((item) => item.sourceRecordId || '(missing source ID)');
   if (
-    productionApply &&
+    productionOperation &&
+    (productionApply || productionDryRun) &&
     (sourceRows.length !== 22 ||
       inScopeRows.length !== 22 ||
       missingSourceIds.length > 0 ||
@@ -397,7 +436,9 @@ async function main() {
         plannedCreates: missingSourceIds.length,
         plannedDuplicates: 0,
         planned:
-          operation === '--dry-run'
+          operation === '--dry-run' ||
+          operation === '--production-dry-run' ||
+          operation === '--staging-dry-run'
             ? 'no writes'
             : 'source-ID-keyed idempotent upsert',
         fieldCoverage: { before: beforeCoverage, after: afterCoverage },
@@ -432,7 +473,7 @@ async function main() {
       2,
     ),
   );
-  if (operation === '--apply' || productionApply)
+  if (operation === '--apply' || updateOnlyApply)
     console.log(`Imported/updated ${await apply(sourceRecords)} demo records.`);
 }
 
