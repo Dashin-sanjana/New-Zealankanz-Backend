@@ -40,6 +40,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm exec prisma generate
       - run: pnpm exec tsc --noEmit -p tsconfig.build.json
       - run: pnpm exec eslint 'src/**/*.ts' 'test/**/*.ts'
       - run: pnpm exec prisma validate
