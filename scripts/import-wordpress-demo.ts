@@ -1,68 +1,72 @@
 import 'dotenv/config';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { PrismaClient, AdStatus, Prisma } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import * as bcrypt from 'bcrypt';
 import { Pool } from 'pg';
+import {
+  parseWordPressDemoManifest,
+  type WordPressDemoRecord,
+} from '../src/ad/wordpress-demo-manifest';
 
 const SOURCE = 'wordpress-marketplace';
-const API =
-  'https://marketplace.newzealankans.co.nz/wp-json/wp/v2/ad_post?per_page=100&_embed=1';
-const HOME_FEATURED = new Set([223, 268, 276, 291, 343, 190, 298, 232]);
-const CATEGORY_MAP: Array<[RegExp, string, string]> = [
-  [/ad_cats-animals/, 'Animals', 'animals'],
-  [/ad_cats-art-design/, 'Art & Design', 'art-design'],
-  [/ad_cats-education/, 'Education', 'education'],
-  [/ad_cats-electronics/, 'Electronics', 'electronics'],
-  [/ad_cats-fashion-beauty/, 'Fashion & Beauty', 'fashion-beauty'],
-  [/ad_cats-furniture/, 'Furniture', 'furniture'],
-  [/ad_cats-games/, 'Games', 'games'],
-  [/ad_cats-jobs/, 'Jobs', 'jobs'],
-  [/ad_cats-real-estate/, 'Property', 'property'],
-  [/ad_cats-services/, 'Services', 'services'],
-  [/ad_cats-vehicles|ad_cats-cars|ad_cats-motorcycles/, 'Motor', 'motor'],
-];
-
-type WpRecord = {
-  id: number;
-  date_gmt?: string;
-  slug: string;
-  link: string;
-  title: { rendered: string };
-  content: { rendered: string };
-  class_list?: string[];
-  status: string;
-};
-type Extracted = {
-  record: WpRecord;
-  title: string;
-  description: string;
-  category: string;
-  categorySlug: string;
-  categories: string[];
-  price: Prisma.Decimal | null;
-  priceCurrency: string | null;
-  priceLabel: string | null;
-  priceType: string | null;
-  location: string | null;
-  images: string[];
-  createdAt: Date | null;
-  featured: boolean;
-  issues: string[];
-};
 
 const dbUrl = process.env.DATABASE_URL;
-if (!dbUrl) throw new Error('DATABASE_URL is required.');
-const target = new URL(dbUrl);
-const operation = process.argv[2] || '--dry-run';
+const args = process.argv
+  .slice(2)
+  .filter((arg, index) => !(index === 0 && arg === '--'));
+const operation = args[0] || '--dry-run';
 if (
-  !['--dry-run', '--apply', '--rollback', '--production-apply'].includes(
-    operation,
-  )
+  ![
+    '--validate-only',
+    '--dry-run',
+    '--apply',
+    '--rollback',
+    '--production-apply',
+  ].includes(operation)
 )
   throw new Error(
-    'Use --dry-run, --apply, --rollback, or gated --production-apply.',
+    'Use --validate-only, --dry-run, --apply, --rollback, or gated --production-apply.',
   );
+const manifestArgument = args.indexOf('--manifest');
+const manifestPath =
+  (manifestArgument >= 0 ? args[manifestArgument + 1] : undefined) ||
+  process.env.WORDPRESS_DEMO_MANIFEST;
+if (!manifestPath)
+  throw new Error('Provide --manifest <path> or WORDPRESS_DEMO_MANIFEST.');
+const sourceRecords = parseWordPressDemoManifest(
+  JSON.parse(readFileSync(resolve(manifestPath), 'utf8')) as unknown,
+);
+if (operation === '--validate-only') {
+  console.log(
+    JSON.stringify(
+      {
+        sourceRecords: sourceRecords.length,
+        numericPrices: sourceRecords.filter((item) => item.price !== null)
+          .length,
+        explicitCurrencies: sourceRecords.filter(
+          (item) => item.priceCurrency !== null,
+        ).length,
+        priceTypes: sourceRecords.filter((item) => item.priceType).length,
+        locations: sourceRecords.filter((item) => item.location).length,
+        mediaReferencesUnverified: sourceRecords.reduce(
+          (sum, item) => sum + item.imageReferenceCount,
+          0,
+        ),
+        imagesToImport: 0,
+        sellerContactEnabled: 0,
+      },
+      null,
+      2,
+    ),
+  );
+  process.exit(0);
+}
+if (!dbUrl)
+  throw new Error('DATABASE_URL is required for database operations.');
+const target = new URL(dbUrl);
 const localTarget =
   target.hostname === '127.0.0.1' &&
   target.port === '55433' &&
@@ -71,12 +75,16 @@ const productionApply = operation === '--production-apply';
 const approvedProductionTarget =
   productionApply &&
   process.env.PRISMA_IMPORT_PRODUCTION_APPROVED === 'yes' &&
+  process.env.PRISMA_IMPORT_PRODUCTION_IDENTITY_VERIFIED === 'yes' &&
+  process.env.PRISMA_IMPORT_RECOVERY_VERIFIED === 'yes' &&
+  process.env.PRISMA_IMPORT_PRODUCTION_PROJECT === 'wispy-mouse-76602888' &&
   process.env.PRISMA_IMPORT_PRODUCTION_BRANCH === 'br-cool-heart-adq4jews' &&
+  process.env.PRISMA_IMPORT_RECOVERY_BRANCH === 'br-twilight-sound-adtnzh8b' &&
   target.hostname.endsWith('.neon.tech') &&
   target.pathname === '/neondb';
 if (productionApply && !approvedProductionTarget)
   throw new Error(
-    'Production import requires the approved production branch ID and exact neondb Neon target.',
+    'Production import requires verified target identity and recovery branch acknowledgements.',
   );
 if (!productionApply && (!localTarget || process.env.NODE_ENV === 'production'))
   throw new Error(
@@ -87,312 +95,179 @@ const prisma = new PrismaClient({
   adapter: new PrismaPg(new Pool({ connectionString: dbUrl })),
 });
 
-function decodeHtml(value: string) {
-  return value
-    .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([\da-f]+);/gi, (_, n: string) =>
-      String.fromCodePoint(parseInt(n, 16)),
-    )
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#0?39;|&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&rsquo;|&lsquo;/g, '’')
-    .replace(/&rdquo;|&ldquo;/g, '”')
-    .replace(/&mdash;/g, '—')
-    .replace(/&ndash;/g, '–')
-    .replace(/&hellip;/g, '…')
-    .replace(/&pound;/g, '£')
-    .replace(/&euro;/g, '€');
-}
-
-function textFromHtml(value: string) {
-  return decodeHtml(
-    value.replace(/<!--[^]*?-->/g, ' ').replace(/<[^>]*>/g, ' '),
-  )
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function extractGroup(html: string, id: string, nextId?: string) {
-  const start = html.search(new RegExp(`id=["']${id}["']`, 'i'));
-  if (start < 0) return '';
-  const end = nextId
-    ? html.slice(start).search(new RegExp(`id=["']${nextId}["']`, 'i'))
-    : -1;
-  return html.slice(start, end >= 0 ? start + end : start + 25000);
-}
-
-function parseDetail(html: string) {
-  const priceMatch = html.match(
-    /class=["'][^"']*\bad-price-box\b[^"']*["'][^>]*>([\s\S]{0,1800}?)<\/div>/i,
-  );
-  const priceLabel = priceMatch
-    ? textFromHtml(priceMatch[1])
-        .replace(/\bDealer\b.*$/i, '')
-        .trim()
-    : null;
-  const locationGroup = extractGroup(html, 'adt-ad-location-box');
-  const locationMatch = locationGroup.match(
-    /Location:\s*([\s\S]*?)(?:Write a Review|<\/div>|<\/a>)/i,
-  );
-  const location = locationMatch
-    ? textFromHtml(locationMatch[1]) || null
-    : null;
-  const gallery = extractGroup(html, 'sync1', 'sync2');
-  const images = [...gallery.matchAll(/https?:[^"'\s<>]+/g)]
-    .map((match) => decodeHtml(match[0]).replace(/&amp;/g, '&'))
-    .filter((url) => {
-      try {
-        const parsed = new URL(url);
-        return (
-          parsed.hostname === 'marketplace.newzealankans.co.nz' &&
-          parsed.pathname.startsWith('/wp-content/uploads/')
-        );
-      } catch {
-        return false;
-      }
-    })
-    .filter((url, index, all) => all.indexOf(url) === index);
-  return { priceLabel, location, images };
-}
-
-function extract(record: WpRecord, html: string | null): Extracted {
-  const classes = (record.class_list || []).filter((entry) =>
-    entry.startsWith('ad_cats-'),
-  );
-  const mapped = CATEGORY_MAP.find(([pattern]) =>
-    classes.some((entry) => pattern.test(entry)),
-  );
-  if (!mapped)
-    throw new Error(`Source ${record.id} has no supported source category.`);
-  const detail = html
-    ? parseDetail(html)
-    : { priceLabel: null, location: null, images: [] };
-  const currency =
-    (record.class_list || [])
-      .map((entry) =>
-        entry.match(/^ad_currency-([a-z]{3})$/i)?.[1]?.toUpperCase(),
-      )
-      .find(Boolean) || null;
-  const amountMatch = detail.priceLabel?.match(
-    /(?:^|\s)(\d[\d,]*(?:\.\d{1,2})?)(?:\s|$)/,
-  );
-  const amount = amountMatch
-    ? new Prisma.Decimal(amountMatch[1].replace(/,/g, ''))
-    : null;
-  const priceType =
-    /\b(negotiable|fixed price)\b/i
-      .exec(detail.priceLabel || '')?.[1]
-      ?.toLowerCase() || null;
-  const issues: string[] = [];
-  if (!html) issues.push('detail-page-unavailable');
-  if (!detail.images.length) issues.push('no-authorized-gallery-image');
-  if (!detail.priceLabel || /no price|price on call/i.test(detail.priceLabel))
-    issues.push('price-missing');
-  if (!currency) issues.push('currency-not-explicit');
-  if (!detail.location) issues.push('location-missing');
-  if (!priceType) issues.push('negotiation-type-not-published');
-  return {
-    record,
-    title: textFromHtml(record.title.rendered),
-    description: textFromHtml(record.content.rendered),
-    category: mapped[1],
-    categorySlug: mapped[2],
-    categories: classes.map((entry) => entry.slice('ad_cats-'.length)),
-    price: amount,
-    priceCurrency: currency,
-    priceLabel: detail.priceLabel,
-    priceType,
-    location: detail.location,
-    // No individual third-party image has verified reuse permission for production.
-    // The frontend renders its clearly labeled missing-image state for these demos.
-    images: [],
-    createdAt: record.date_gmt ? new Date(`${record.date_gmt}Z`) : null,
-    featured: HOME_FEATURED.has(record.id),
-    issues,
-  };
-}
-
-async function getSourceRecords(): Promise<Extracted[]> {
-  const response = await fetch(API, {
-    headers: { 'User-Agent': 'NewZealankanzDemoImport/1.0 (read-only)' },
-  });
-  if (!response.ok)
-    throw new Error(`WordPress public API returned HTTP ${response.status}.`);
-  const body = (await response.json()) as WpRecord[];
-  if (!Array.isArray(body) || body.length !== 22)
-    throw new Error(
-      `Expected 22 published source rows; received ${Array.isArray(body) ? body.length : 'invalid response'}.`,
-    );
-  const fetchRecord = async (record: WpRecord) => {
-    if (record.status !== 'publish')
-      throw new Error(`Source ${record.id} is not published.`);
-    let html: string | null = null;
-    for (let attempt = 0; attempt < 4 && !html; attempt++) {
-      try {
-        const page = await fetch(record.link, {
-          headers: { 'User-Agent': 'NewZealankanzDemoImport/1.0 (read-only)' },
-        });
-        if (page.ok) html = await page.text();
-        else if (page.status === 404) break;
-        else if (attempt < 3)
-          await new Promise((resolve) =>
-            setTimeout(resolve, 350 * (attempt + 1)),
-          );
-      } catch {
-        if (attempt < 3)
-          await new Promise((resolve) =>
-            setTimeout(resolve, 350 * (attempt + 1)),
-          );
-      }
-    }
-    return extract(record, html);
-  };
-  const records: Extracted[] = [];
-  for (let start = 0; start < body.length; start += 4) {
-    records.push(
-      ...(await Promise.all(body.slice(start, start + 4).map(fetchRecord))),
-    );
-  }
-  if (new Set(records.map((record) => record.record.id)).size !== 22)
-    throw new Error('Duplicate source IDs in API response.');
-  return records;
-}
-
-async function ensureCategory(name: string, slug: string) {
-  return prisma.category.upsert({
+async function ensureCategory(
+  tx: Prisma.TransactionClient,
+  name: string,
+  slug: string,
+) {
+  return tx.category.upsert({
     where: { slug },
     update: {},
     create: { name, slug },
   });
 }
 
-async function apply(records: Extracted[]) {
-  const existingOwner = await prisma.user.findUnique({
-    where: { email: 'demo-content@system.invalid' },
-  });
-  if (existingOwner && (!existingOwner.systemAccount || existingOwner.active))
-    throw new Error(
-      'Reserved demo owner email is already used by an active or non-demo account.',
-    );
-  const owner =
-    existingOwner ??
-    (await prisma.user.create({
-      data: {
-        email: 'demo-content@system.invalid',
-        name: 'Marketplace Demo Collection',
-        password: await bcrypt.hash(randomBytes(48).toString('hex'), 12),
-        active: false,
-        emailVerified: false,
-        systemAccount: true,
-      },
-    }));
-  const categoryIds = new Map<string, string>();
-  for (const [, name, slug] of CATEGORY_MAP) {
-    const category = await ensureCategory(name, slug);
-    categoryIds.set(slug, category.id);
-  }
-  let imported = 0;
-  for (const item of records) {
-    const location = item.location
-      ? await prisma.location.upsert({
-          where: {
-            slug: item.location
-              .toLocaleLowerCase()
-              .replace(/[^a-z0-9]+/g, '-')
-              .replace(/^-|-$/g, ''),
-          },
-          update: {},
-          create: {
-            name: item.location,
-            slug: item.location
-              .toLocaleLowerCase()
-              .replace(/[^a-z0-9]+/g, '-')
-              .replace(/^-|-$/g, ''),
-          },
-        })
-      : null;
-    const attributes = {
-      _sourceCategories: item.categories,
-      _sourceAdType:
-        item.record.class_list
-          ?.find((entry) => entry.startsWith('ad_type-'))
-          ?.slice(8) || null,
-      _sourceDate: item.record.date_gmt || null,
-    } as Prisma.InputJsonValue;
-    const key = {
-      sourceSystem_sourceRecordId: {
-        sourceSystem: SOURCE,
-        sourceRecordId: String(item.record.id),
-      },
-    };
-    const existingSourceAd = await prisma.ad.findUnique({
-      where: key,
-      select: { id: true, demoContent: true },
-    });
-    if (existingSourceAd && !existingSourceAd.demoContent)
-      throw new Error(
-        `Source ID ${item.record.id} collides with a non-demo production listing.`,
-      );
-    const ad = await prisma.ad.upsert({
-      where: key,
-      update: {
-        title: item.title,
-        description: item.description,
-        categoryId: categoryIds.get(item.categorySlug)!,
-        locationId: location?.id ?? null,
-        price: item.price,
-        priceCurrency: item.priceCurrency,
-        priceLabel: item.priceLabel,
-        priceType: item.priceType,
-        status: AdStatus.APPROVED,
-        featured: item.featured,
-        demoContent: true,
-        sourceUrl: item.record.link,
-        attributes,
-        ...(item.createdAt ? { createdAt: item.createdAt } : {}),
-      },
-      create: {
-        title: item.title,
-        slug: `${item.record.slug}-demo`,
-        description: item.description,
-        categoryId: categoryIds.get(item.categorySlug)!,
-        locationId: location?.id ?? null,
-        price: item.price,
-        priceCurrency: item.priceCurrency,
-        priceLabel: item.priceLabel,
-        priceType: item.priceType,
-        status: AdStatus.APPROVED,
-        featured: item.featured,
-        demoContent: true,
-        sourceSystem: SOURCE,
-        sourceRecordId: String(item.record.id),
-        sourceUrl: item.record.link,
-        userId: owner.id,
-        attributes,
-        ...(item.createdAt ? { createdAt: item.createdAt } : {}),
-      },
-    });
-    await prisma.adImage.deleteMany({ where: { adId: ad.id } });
-    if (item.images.length) {
-      await prisma.adImage.createMany({
-        data: item.images.map((url, sortOrder) => ({
-          adId: ad.id,
-          url,
-          sortOrder,
-          filename:
-            url.split('/').pop() || `source-${item.record.id}-${sortOrder}`,
-          mimetype: null,
-          size: null,
-        })),
+async function apply(records: WordPressDemoRecord[]) {
+  return prisma.$transaction(async (tx) => {
+    if (productionApply) {
+      const current = await tx.ad.findMany({
+        where: { sourceSystem: SOURCE },
+        select: { sourceRecordId: true, demoContent: true },
       });
+      const expectedIds = new Set(
+        records.map((record) => String(record.sourceId)),
+      );
+      if (
+        current.length !== records.length ||
+        current.some(
+          (row) =>
+            !row.demoContent ||
+            !row.sourceRecordId ||
+            !expectedIds.has(row.sourceRecordId),
+        ) ||
+        new Set(current.map((row) => row.sourceRecordId)).size !==
+          records.length
+      ) {
+        throw new Error(
+          'Production transaction requires exactly 22 unique existing demo source IDs; no creates are allowed.',
+        );
+      }
     }
-    imported++;
-  }
-  return imported;
+    // Production reconciliation is update-only. It preserves the current owner of
+    // each already imported demo record and cannot create users or listings.
+    let ownerId: string | undefined;
+    if (!productionApply) {
+      const existingOwner = await tx.user.findUnique({
+        where: { email: 'demo-content@system.invalid' },
+      });
+      if (
+        existingOwner &&
+        (!existingOwner.systemAccount || existingOwner.active)
+      )
+        throw new Error(
+          'Reserved demo owner email is already used by an active or non-demo account.',
+        );
+      const owner =
+        existingOwner ??
+        (await tx.user.create({
+          data: {
+            email: 'demo-content@system.invalid',
+            name: 'Marketplace Demo Collection',
+            password: await bcrypt.hash(randomBytes(48).toString('hex'), 12),
+            active: false,
+            emailVerified: false,
+            systemAccount: true,
+          },
+        }));
+      ownerId = owner.id;
+    }
+    const categoryIds = new Map<string, string>();
+    for (const { name, slug } of new Map(
+      records.map((item) => [
+        item.categorySlug,
+        { name: item.categoryName, slug: item.categorySlug },
+      ]),
+    ).values()) {
+      const category = await ensureCategory(tx, name, slug);
+      categoryIds.set(slug, category.id);
+    }
+    let imported = 0;
+    for (const item of records) {
+      const location = item.location
+        ? await tx.location.upsert({
+            where: {
+              slug: item.location
+                .toLocaleLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-|-$/g, ''),
+            },
+            update: {},
+            create: {
+              name: item.location,
+              slug: item.location
+                .toLocaleLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-|-$/g, ''),
+            },
+          })
+        : null;
+      const attributes = {
+        _sourceCategories: item.categories,
+        _sourceCurrencySymbol: item.currencySymbol,
+        _sourcePriceOriginal: item.price,
+        _sourcePriceType: item.priceType,
+        _sourceDate: item.publishedAt?.toISOString() || null,
+      } as Prisma.InputJsonValue;
+      const key = {
+        sourceSystem_sourceRecordId: {
+          sourceSystem: SOURCE,
+          sourceRecordId: String(item.sourceId),
+        },
+      };
+      const existingSourceAd = await tx.ad.findUnique({
+        where: key,
+        select: { id: true, demoContent: true, sourceUrl: true },
+      });
+      if (existingSourceAd && !existingSourceAd.demoContent)
+        throw new Error(
+          `Source ID ${item.sourceId} collides with a non-demo listing.`,
+        );
+      if (existingSourceAd?.sourceUrl) {
+        const existingPath = new URL(existingSourceAd.sourceUrl).pathname;
+        if (!existingPath.includes(`/ad/${item.slug}/`))
+          throw new Error(
+            `Source ID ${item.sourceId} has a conflicting source URL.`,
+          );
+      }
+      if (productionApply && !existingSourceAd)
+        throw new Error(
+          `Production update-only reconciliation cannot create source ID ${item.sourceId}.`,
+        );
+      await tx.ad.upsert({
+        where: key,
+        update: {
+          title: item.title,
+          description: item.description,
+          categoryId: categoryIds.get(item.categorySlug)!,
+          locationId: location?.id ?? null,
+          price: item.price === null ? null : new Prisma.Decimal(item.price),
+          priceCurrency: item.priceCurrency,
+          priceLabel: item.priceLabel,
+          priceType: item.priceType,
+          status: AdStatus.APPROVED,
+          featured: item.featured,
+          demoContent: true,
+          sourceUrl: item.sourceUrl,
+          attributes,
+          ...(item.publishedAt ? { createdAt: item.publishedAt } : {}),
+        },
+        create: {
+          title: item.title,
+          slug: `${item.slug}-demo`,
+          description: item.description,
+          categoryId: categoryIds.get(item.categorySlug)!,
+          locationId: location?.id ?? null,
+          price: item.price === null ? null : new Prisma.Decimal(item.price),
+          priceCurrency: item.priceCurrency,
+          priceLabel: item.priceLabel,
+          priceType: item.priceType,
+          status: AdStatus.APPROVED,
+          featured: item.featured,
+          demoContent: true,
+          sourceSystem: SOURCE,
+          sourceRecordId: String(item.sourceId),
+          sourceUrl: item.sourceUrl,
+          userId: ownerId!,
+          attributes,
+          ...(item.publishedAt ? { createdAt: item.publishedAt } : {}),
+        },
+      });
+      // Source media URLs are unverified references. Do not import them or alter
+      // any previously stored image references during reconciliation.
+      imported++;
+    }
+    return imported;
+  });
 }
 
 async function rollback() {
@@ -410,6 +285,29 @@ async function rollback() {
   });
 }
 
+function fieldCoverage(
+  records: Array<{
+    price: unknown;
+    priceCurrency: string | null;
+    priceType: string | null;
+    locationId?: string | null;
+    location?: string | null;
+    images?: unknown[];
+  }>,
+) {
+  return {
+    numericPrice: records.filter((item) => item.price !== null).length,
+    currency: records.filter((item) => item.priceCurrency !== null).length,
+    priceType: records.filter((item) => item.priceType !== null).length,
+    location: records.filter(
+      (item) =>
+        (item.locationId !== null && item.locationId !== undefined) ||
+        Boolean(item.location),
+    ).length,
+    images: records.filter((item) => (item.images?.length || 0) > 0).length,
+  };
+}
+
 async function main() {
   if (operation === '--rollback') {
     console.log(
@@ -417,47 +315,117 @@ async function main() {
     );
     return;
   }
-  const items = await getSourceRecords();
-  const alreadyImported = await prisma.ad.count({
-    where: { sourceSystem: SOURCE, demoContent: true },
-  });
-  if (productionApply) {
-    const sourceRows = await prisma.ad.count({
-      where: { sourceSystem: SOURCE },
-    });
-    if (
-      sourceRows !== alreadyImported ||
-      (alreadyImported !== 0 && alreadyImported !== 22)
-    )
-      throw new Error(
-        `Found ${sourceRows} source-keyed rows and ${alreadyImported} demos; expected none or exactly 22 verified demo listings.`,
-      );
+  const sourceIds = sourceRecords.map((item) => String(item.sourceId));
+  const [sourceRows, alreadyImported, nonDemoCount, userCount] =
+    await Promise.all([
+      prisma.ad.findMany({
+        where: { sourceSystem: SOURCE },
+        select: {
+          id: true,
+          sourceRecordId: true,
+          demoContent: true,
+          price: true,
+          priceCurrency: true,
+          priceType: true,
+          locationId: true,
+          images: { select: { id: true } },
+        },
+      }),
+      prisma.ad.count({ where: { sourceSystem: SOURCE, demoContent: true } }),
+      prisma.ad.count({ where: { demoContent: false } }),
+      prisma.user.count(),
+    ]);
+  const sourceIdSet = new Set(sourceIds);
+  const inScopeRows = sourceRows.filter(
+    (item) => item.sourceRecordId && sourceIdSet.has(item.sourceRecordId),
+  );
+  const bySourceId = new Map<string, (typeof sourceRows)[number]>();
+  for (const row of inScopeRows) {
+    if (row.sourceRecordId) bySourceId.set(row.sourceRecordId, row);
   }
+  const duplicateSourceIds = inScopeRows
+    .map((item) => item.sourceRecordId)
+    .filter(
+      (id, index, all): id is string =>
+        Boolean(id) && all.indexOf(id) !== index,
+    );
+  const missingSourceIds = sourceIds.filter((id) => !bySourceId.has(id));
+  const collisions = inScopeRows.filter((item) => !item.demoContent);
+  const unexpectedSourceIds = sourceRows
+    .filter(
+      (item) => !item.sourceRecordId || !sourceIdSet.has(item.sourceRecordId),
+    )
+    .map((item) => item.sourceRecordId || '(missing source ID)');
+  if (
+    productionApply &&
+    (sourceRows.length !== 22 ||
+      inScopeRows.length !== 22 ||
+      missingSourceIds.length > 0 ||
+      collisions.length > 0 ||
+      duplicateSourceIds.length > 0 ||
+      unexpectedSourceIds.length > 0)
+  )
+    throw new Error(
+      `Production reconciliation requires exactly 22 matching demo source IDs; found ${inScopeRows.length} matches, ${missingSourceIds.length} missing, ${collisions.length} collisions, ${duplicateSourceIds.length} duplicates, and ${unexpectedSourceIds.length} unexpected source rows.`,
+    );
+
+  const beforeCoverage = fieldCoverage(inScopeRows);
+  const afterCoverage = fieldCoverage(
+    sourceRecords.map((item) => ({
+      price: item.price,
+      priceCurrency: item.priceCurrency,
+      priceType: item.priceType,
+      location: item.location,
+      images: item.images,
+    })),
+  );
   console.log(
     JSON.stringify(
       {
         mode: operation,
         target: `${target.hostname}:${target.port}${target.pathname}`,
-        sourceRecords: items.length,
+        sourceRecords: sourceRecords.length,
         alreadyImported,
-        planned: operation === '--dry-run' ? 'no writes' : 'idempotent upsert',
+        nonDemoListingsPreservedByUpdateOnlyMode: nonDemoCount,
+        userRecordsPreservedByUpdateOnlyMode: userCount,
+        matchingSourceIds: inScopeRows.length,
+        missingSourceIds,
+        collisions: collisions.length,
+        duplicateSourceIds: [...new Set(duplicateSourceIds)],
+        unexpectedSourceIds,
+        plannedUpdates: inScopeRows.filter((item) => item.demoContent).length,
+        plannedCreates: missingSourceIds.length,
+        plannedDuplicates: 0,
+        planned:
+          operation === '--dry-run'
+            ? 'no writes'
+            : 'source-ID-keyed idempotent upsert',
+        fieldCoverage: { before: beforeCoverage, after: afterCoverage },
         summary: {
-          featured: items.filter((item) => item.featured).length,
-          withImages: items.filter((item) => item.images.length).length,
-          withoutImages: items.filter((item) => !item.images.length).length,
-          missingLocation: items.filter((item) => !item.location).length,
-          missingCurrency: items.filter((item) => !item.priceCurrency).length,
+          featured: sourceRecords.filter((item) => item.featured).length,
+          numericPrices: sourceRecords.filter((item) => item.price !== null)
+            .length,
+          explicitCurrencies: sourceRecords.filter(
+            (item) => item.priceCurrency !== null,
+          ).length,
+          priceTypes: sourceRecords.filter((item) => item.priceType).length,
+          locations: sourceRecords.filter((item) => item.location).length,
+          mediaReferencesUnverified: sourceRecords.reduce(
+            (sum, item) => sum + item.imageReferenceCount,
+            0,
+          ),
+          imagesToImport: 0,
         },
-        records: items.map((item) => ({
-          id: item.record.id,
-          slug: item.record.slug,
+        records: sourceRecords.map((item) => ({
+          id: item.sourceId,
+          slug: item.slug,
           title: item.title,
-          category: item.category,
+          category: item.categoryName,
           images: item.images.length,
-          price: item.priceLabel,
+          price: item.price,
+          priceType: item.priceType,
           currency: item.priceCurrency,
           location: item.location,
-          issues: item.issues,
         })),
       },
       null,
@@ -465,7 +433,7 @@ async function main() {
     ),
   );
   if (operation === '--apply' || productionApply)
-    console.log(`Imported/updated ${await apply(items)} demo records.`);
+    console.log(`Imported/updated ${await apply(sourceRecords)} demo records.`);
 }
 
 main()
